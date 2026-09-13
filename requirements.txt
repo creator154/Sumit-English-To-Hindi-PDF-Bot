@@ -1,10 +1,6 @@
 pyrogram
 tgcrypto
-PyMuPDF
+pymupdf
+requests
 fpdf2
 deep-translator
-requests
-pytesseract
-Pillow
-numpy
-opencv-python-headless
