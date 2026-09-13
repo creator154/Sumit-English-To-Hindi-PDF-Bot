@@ -2,17 +2,58 @@ import os
 import re
 import asyncio
 
-import fitz  # PyMuPDF
+import fitz
 from pyrogram import Client, filters
 from deep_translator import GoogleTranslator
 from fpdf import FPDF
 
-from config import API_ID, API_HASH, BOT_TOKEN, DOWNLOAD_DIR, OUTPUT_DIR, FONT_PATH
+from config import API_ID, API_HASH, BOT_TOKEN, DOWNLOAD_DIR, OUTPUT_DIR
 
+
+# =========================
+# DIRECTORIES
+# =========================
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+DOWNLOAD_DIR = os.path.join(BASE_DIR, DOWNLOAD_DIR)
+OUTPUT_DIR = os.path.join(BASE_DIR, OUTPUT_DIR)
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+
+# =========================
+# FIND FONT
+# =========================
+
+FONT_CANDIDATES = [
+    "NotoSansDevanagari-Regular.ttf",
+    "NotoSansDevanagari-Regular (6).ttf",
+]
+
+FONT_PATH = None
+
+for filename in FONT_CANDIDATES:
+    path = os.path.join(BASE_DIR, filename)
+
+    if os.path.isfile(path):
+        FONT_PATH = path
+        break
+
+
+if FONT_PATH is None:
+    raise FileNotFoundError(
+        "NotoSansDevanagari-Regular.ttf font repo me nahi mila."
+    )
+
+
+print("FONT FOUND:", FONT_PATH)
+
+
+# =========================
+# TELEGRAM BOT
+# =========================
 
 app = Client(
     "english_hindi_pdf_bot",
@@ -22,11 +63,35 @@ app = Client(
 )
 
 
-translator = GoogleTranslator(source="en", target="hi")
+translator = GoogleTranslator(
+    source="en",
+    target="hi"
+)
 
 
-def split_text(text, max_chars=2500):
-    """Text ko safe chunks me divide karta hai."""
+# =========================
+# TEXT CLEAN
+# =========================
+
+def clean_text(text):
+    if not text:
+        return ""
+
+    text = text.replace("\x00", "")
+    text = text.replace("\r\n", "\n")
+    text = text.replace("\r", "\n")
+
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
+
+
+# =========================
+# SPLIT TRANSLATION
+# =========================
+
+def split_text(text, max_chars=1800):
+
     text = text.strip()
 
     if not text:
@@ -35,6 +100,7 @@ def split_text(text, max_chars=2500):
     chunks = []
 
     while len(text) > max_chars:
+
         cut = text.rfind("\n", 0, max_chars)
 
         if cut < 500:
@@ -43,7 +109,11 @@ def split_text(text, max_chars=2500):
         if cut < 500:
             cut = max_chars
 
-        chunks.append(text[:cut].strip())
+        chunk = text[:cut].strip()
+
+        if chunk:
+            chunks.append(chunk)
+
         text = text[cut:].strip()
 
     if text:
@@ -52,76 +122,109 @@ def split_text(text, max_chars=2500):
     return chunks
 
 
+# =========================
+# TRANSLATION
+# =========================
+
 async def translate_text(text):
-    """English text ko Hindi me translate karta hai."""
+
     chunks = split_text(text)
 
     result = []
 
-    for chunk in chunks:
+    total = len(chunks)
+
+    for index, chunk in enumerate(chunks, start=1):
+
         if not chunk.strip():
             continue
 
         try:
+
             translated = await asyncio.to_thread(
                 translator.translate,
                 chunk
             )
 
-            if translated:
+            if translated and translated.strip():
                 result.append(translated)
 
-        except Exception as e:
-            print("Translation error:", e)
+            else:
+                result.append(chunk)
 
-            # Agar translation fail ho to original text rakhenge
+        except Exception as e:
+
+            print(
+                f"Translation error {index}/{total}:",
+                repr(e)
+            )
+
+            # Translation fail ho to original text rakho
             result.append(chunk)
 
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.5)
 
     return "\n\n".join(result)
 
 
-def clean_text(text):
-    """PDF ke liye text clean karta hai."""
-    text = text.replace("\x00", "")
-    text = text.replace("\r", "\n")
+# =========================
+# BREAK LONG WORDS
+# =========================
 
-    # Bahut zyada blank lines hatao
-    text = re.sub(r"\n{3,}", "\n\n", text)
+def safe_lines(text, max_len=80):
 
-    return text.strip()
-
-
-def safe_lines(text, max_len=90):
-    """
-    Bahut lambi URL/word ko todta hai,
-    jisse FPDF horizontal-space error na aaye.
-    """
-    lines = []
+    output = []
 
     for line in text.split("\n"):
+
         line = line.strip()
 
         if not line:
-            lines.append("")
+            output.append("")
             continue
 
         while len(line) > max_len:
-            lines.append(line[:max_len])
+
+            output.append(line[:max_len])
+
             line = line[max_len:]
 
         if line:
-            lines.append(line)
+            output.append(line)
 
-    return "\n".join(lines)
+    return "\n".join(output)
 
+
+# =========================
+# CHECK HINDI CHARACTER
+# =========================
+
+def is_devanagari(char):
+
+    code = ord(char)
+
+    return (
+        0x0900 <= code <= 0x097F
+        or
+        0xA8E0 <= code <= 0xA8FF
+    )
+
+
+# =========================
+# CREATE PDF
+# =========================
 
 def create_pdf(text, output_path):
-    """Hindi + English compatible PDF banata hai."""
+
+    text = clean_text(text)
+    text = safe_lines(text)
 
     pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
+
+    pdf.set_auto_page_break(
+        auto=True,
+        margin=15
+    )
 
     pdf.add_page()
 
@@ -132,60 +235,171 @@ def create_pdf(text, output_path):
         FONT_PATH
     )
 
-    pdf.set_font("NotoHindi", size=12)
+    # Hindi font
+    pdf.set_font(
+        "NotoHindi",
+        size=12
+    )
 
-    text = clean_text(text)
-    text = safe_lines(text)
+    usable_width = (
+        pdf.w - pdf.l_margin - pdf.r_margin
+    )
 
-    # UTF-8 Hindi text
-    for paragraph in text.split("\n"):
-        if not paragraph.strip():
+    line_height = 7
+
+    for line in text.split("\n"):
+
+        if not line.strip():
+
             pdf.ln(4)
+
             continue
 
-        try:
+        # Split Hindi / English / numbers
+        runs = []
+
+        current = ""
+        current_type = None
+
+        for char in line:
+
+            char_type = (
+                "hindi"
+                if is_devanagari(char)
+                else "normal"
+            )
+
+            if current_type is None:
+
+                current_type = char_type
+                current = char
+
+            elif char_type == current_type:
+
+                current += char
+
+            else:
+
+                runs.append(
+                    (current_type, current)
+                )
+
+                current_type = char_type
+                current = char
+
+        if current:
+            runs.append(
+                (current_type, current)
+            )
+
+        # If line contains only Hindi
+        if all(
+            item[0] == "hindi"
+            for item in runs
+        ):
+
+            pdf.set_font(
+                "NotoHindi",
+                size=12
+            )
+
             pdf.multi_cell(
                 0,
-                7,
-                paragraph,
+                line_height,
+                line,
                 wrapmode="CHAR"
             )
-        except Exception as e:
-            print("PDF line error:", e)
 
-            # Character-by-character fallback
-            for part in [
-                paragraph[i:i + 70]
-                for i in range(0, len(paragraph), 70)
-            ]:
-                pdf.multi_cell(
-                    0,
-                    7,
-                    part,
-                    wrapmode="CHAR"
+            continue
+
+        # Mixed text
+        #
+        # We render Hindi with Noto.
+        # English/numbers with Helvetica.
+
+        for run_type, run_text in runs:
+
+            if run_type == "hindi":
+
+                pdf.set_font(
+                    "NotoHindi",
+                    size=12
                 )
+
+            else:
+
+                pdf.set_font(
+                    "Helvetica",
+                    size=12
+                )
+
+            # Break extremely long pieces
+            pieces = []
+
+            while len(run_text) > 60:
+
+                pieces.append(
+                    run_text[:60]
+                )
+
+                run_text = run_text[60:]
+
+            if run_text:
+                pieces.append(run_text)
+
+            for piece in pieces:
+
+                try:
+
+                    pdf.write(
+                        line_height,
+                        piece
+                    )
+
+                except Exception as e:
+
+                    print(
+                        "PDF write error:",
+                        repr(e)
+                    )
+
+        pdf.ln(line_height)
 
     pdf.output(output_path)
 
 
+# =========================
+# START
+# =========================
+
 @app.on_message(filters.command("start"))
 async def start_handler(client, message):
+
     await message.reply_text(
         "🇮🇳 **English → Hindi PDF Bot**\n\n"
-        "English PDF bhejo.\n"
-        "Main uska Hindi translated PDF bana kar bhej dunga."
+        "English PDF bhejo.\n\n"
+        "Main uska Hindi translated PDF "
+        "bana kar bhej dunga."
     )
 
+
+# =========================
+# PDF HANDLER
+# =========================
 
 @app.on_message(filters.document)
 async def pdf_handler(client, message):
 
     document = message.document
 
-    if not document.file_name.lower().endswith(".pdf"):
+    filename = document.file_name or ""
+
+    if not filename.lower().endswith(".pdf"):
+
         await message.reply_text(
             "❌ Sirf PDF file bhejo."
         )
+
         return
 
     status = await message.reply_text(
@@ -194,11 +408,11 @@ async def pdf_handler(client, message):
 
     input_path = os.path.join(
         DOWNLOAD_DIR,
-        document.file_name
+        filename
     )
 
     output_name = (
-        os.path.splitext(document.file_name)[0]
+        os.path.splitext(filename)[0]
         + "_Hindi.pdf"
     )
 
@@ -209,6 +423,10 @@ async def pdf_handler(client, message):
 
     try:
 
+        # -------------------------
+        # DOWNLOAD
+        # -------------------------
+
         await message.download(
             file_name=input_path
         )
@@ -217,40 +435,66 @@ async def pdf_handler(client, message):
             "📖 PDF read ho rahi hai..."
         )
 
-        # PyMuPDF se text extraction
+        # -------------------------
+        # READ PDF
+        # -------------------------
+
         doc = fitz.open(input_path)
 
         all_text = []
 
         total_pages = len(doc)
 
-        for page_number, page in enumerate(doc, start=1):
+        for page_number, page in enumerate(
+            doc,
+            start=1
+        ):
 
-            text = page.get_text("text")
+            page_text = page.get_text(
+                "text"
+            )
 
-            if text.strip():
-                all_text.append(text)
+            if page_text.strip():
+
+                all_text.append(
+                    page_text
+                )
 
             if page_number % 5 == 0:
+
                 await status.edit_text(
-                    f"📖 Reading pages...\n"
+                    "📖 Reading pages...\n"
                     f"{page_number}/{total_pages}"
                 )
 
         doc.close()
 
-        original_text = "\n\n".join(all_text)
-        original_text = clean_text(original_text)
+        original_text = "\n\n".join(
+            all_text
+        )
+
+        original_text = clean_text(
+            original_text
+        )
 
         if not original_text:
+
             await status.edit_text(
-                "❌ Is PDF me selectable text nahi mila.\n\n"
-                "Ho sakta hai PDF scanned/image based ho."
+                "❌ Is PDF me selectable "
+                "text nahi mila.\n\n"
+                "Ho sakta hai PDF "
+                "scanned/image based ho."
             )
+
             return
 
+        # -------------------------
+        # TRANSLATE
+        # -------------------------
+
         await status.edit_text(
-            "🌐 English → Hindi translation started..."
+            "🌐 English → Hindi\n"
+            "Translation started..."
         )
 
         translated_text = await translate_text(
@@ -258,10 +502,16 @@ async def pdf_handler(client, message):
         )
 
         if not translated_text.strip():
+
             await status.edit_text(
                 "❌ Translation nahi ho paya."
             )
+
             return
+
+        # -------------------------
+        # CREATE PDF
+        # -------------------------
 
         await status.edit_text(
             "📝 Hindi PDF ban rahi hai..."
@@ -271,6 +521,10 @@ async def pdf_handler(client, message):
             translated_text,
             output_path
         )
+
+        # -------------------------
+        # SEND PDF
+        # -------------------------
 
         await status.edit_text(
             "📤 Hindi PDF upload ho rahi hai..."
@@ -288,28 +542,58 @@ async def pdf_handler(client, message):
 
     except Exception as e:
 
-        print("MAIN ERROR:", repr(e))
-
-        await status.edit_text(
-            f"❌ Error aa gaya:\n\n"
-            f"`{str(e)[:3000]}`"
+        print(
+            "MAIN ERROR:",
+            repr(e)
         )
+
+        try:
+
+            await status.edit_text(
+                "❌ Error aa gaya:\n\n"
+                f"`{str(e)[:3000]}`"
+            )
+
+        except Exception:
+
+            pass
 
     finally:
 
+        # Delete downloaded PDF
         try:
+
             if os.path.exists(input_path):
+
                 os.remove(input_path)
+
         except Exception:
+
             pass
 
+        # Delete generated PDF
         try:
+
             if os.path.exists(output_path):
+
                 os.remove(output_path)
+
         except Exception:
+
             pass
 
 
-print("🇮🇳 English → Hindi PDF Bot Started!")
+# =========================
+# RUN
+# =========================
+
+print(
+    "🇮🇳 English → Hindi PDF Bot Started!"
+)
+
+print(
+    "Using font:",
+    FONT_PATH
+)
 
 app.run()
