@@ -20,7 +20,7 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # =========================
-# FONT AUTO DOWNLOAD - FINAL FIX
+# FONT AUTO DOWNLOAD - FIXED
 # =========================
 FONT_PATH = os.path.join(BASE_DIR, "NotoSansDevanagari-Regular.ttf")
 
@@ -30,40 +30,36 @@ FONT_URLS = [
     "https://github.com/google/fonts/raw/main/ofl/notosansdevanagari/NotoSansDevanagari%5Bwdth%2Cwght%5D.ttf"
 ]
 
-# Corrupted file check
 if os.path.exists(FONT_PATH):
     if os.path.getsize(FONT_PATH) < 100000:
-        print(f"Corrupted font {os.path.getsize(FONT_PATH)} bytes - deleting")
+        print(f"Corrupted font delete: {os.path.getsize(FONT_PATH)} bytes")
         try: os.remove(FONT_PATH)
         except: pass
 
-# Download if not exists
 if not os.path.exists(FONT_PATH):
     print("Font download start...")
     ok = False
     for url in FONT_URLS:
         try:
-            print(f"Trying URL: {url}")
+            print(f"Trying: {url}")
             r = requests.get(url, timeout=60)
             r.raise_for_status()
-            if len(r.content) < 50000:
-                print(f"File too small: {len(r.content)}")
-                continue
+            if len(r.content) < 50000: continue
             with open(FONT_PATH, "wb") as f:
                 f.write(r.content)
-            print(f"SUCCESS: {FONT_PATH} - {os.path.getsize(FONT_PATH)} bytes")
+            print(f"SUCCESS: FONT DOWNLOADED - {os.path.getsize(FONT_PATH)} bytes")
             ok = True
             break
         except Exception as e:
-            print(f"URL failed {url}: {e}")
+            print(f"Failed {url}: {e}")
             continue
     if not ok:
-        raise FileNotFoundError("Teeno font URLs fail ho gaye")
+        raise FileNotFoundError("Font download fail")
 
 print("FONT FOUND:", FONT_PATH)
 
 # =========================
-# BOT
+# BOT CLIENT
 # =========================
 app = Client("english_hindi_pdf_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -73,12 +69,13 @@ def clean_text(text):
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
-def split_text(text, max_chars=1200):
+def split_text(text, max_chars=1000):
     text = text.strip()
     if not text: return []
     chunks = []
     while len(text) > max_chars:
         cut = text.rfind("\n", 0, max_chars)
+        if cut < 300: cut = text.rfind(".", 0, max_chars)
         if cut < 300: cut = text.rfind(" ", 0, max_chars)
         if cut < 300: cut = max_chars
         chunk = text[:cut].strip()
@@ -91,6 +88,7 @@ async def translate_text(text, status_msg):
     chunks = split_text(text)
     result = []
     total = len(chunks)
+    print(f"Total chunks: {total}")
     for index, chunk in enumerate(chunks, start=1):
         if not chunk.strip(): continue
         translated = None
@@ -105,35 +103,53 @@ async def translate_text(text, status_msg):
             except Exception as e2:
                 print(f"MyMemory fail: {e2}")
                 translated = chunk
-        result.append(translated if translated and translated.strip() else chunk)
+
+        if translated and translated.strip():
+            result.append(translated)
+        else:
+            result.append(chunk)
+
         await asyncio.sleep(1.2)
         if index % 2 == 0:
-            try: await status_msg.edit_text(f"🌐 Translation: {index}/{total}")
+            try: await status_msg.edit_text(f"🌐 Translate ho raha hai: {index}/{total}")
             except: pass
     return "\n\n".join(result)
 
+# =========================
+# CREATE PDF - 1 2 3 BUG FIX
+# =========================
 def create_pdf(text, output_path):
     text = clean_text(text)
+
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
-    pdf.add_font("NotoHindi", "", FONT_PATH)
-    pdf.set_font("NotoHindi", size=12)
-    for line in text.split("\n"):
-        line = line.strip()
-        if not line:
-            pdf.ln(4)
-            continue
-        try:
-            pdf.multi_cell(0, 7, line)
-        except Exception as e:
-            print(f"PDF error: {e}")
-            pdf.multi_cell(0, 7, line.encode('utf-8','ignore').decode('utf-8'))
-    pdf.output(output_path)
 
+    # IMPORTANT FIX: uni=True for Hindi
+    pdf.add_font("NotoHindi", "", FONT_PATH, uni=True)
+    pdf.set_font("NotoHindi", size=12)
+
+    if len(text) < 20:
+        text = "Is PDF me text nahi mila ya translation fail ho gaya. Kripya selectable text wala PDF bheje."
+
+    # Paragraph wise likho
+    for para in text.split("\n\n"):
+        para = para.strip()
+        if not para:
+            pdf.ln(5)
+            continue
+        pdf.multi_cell(0, 8, para)
+        pdf.ln(4)
+
+    pdf.output(output_path)
+    print(f"PDF created: {output_path}")
+
+# =========================
+# HANDLERS
+# =========================
 @app.on_message(filters.command("start"))
 async def start_handler(client, message):
-    await message.reply_text("🇮🇳 **English → Hindi PDF Bot**\n\nEnglish PDF bhejo, Hindi bana dunga.")
+    await message.reply_text("🇮🇳 **English → Hindi PDF Bot Ready**\n\nEnglish PDF bhejo, mai Hindi me convert kar dunga.")
 
 @app.on_message(filters.document)
 async def pdf_handler(client, message):
@@ -141,29 +157,42 @@ async def pdf_handler(client, message):
     if not filename.lower().endswith(".pdf"):
         await message.reply_text("❌ Sirf PDF bhejo.")
         return
-    status = await message.reply_text("📥 Download ho rahi hai...")
+
+    status = await message.reply_text("📥 PDF download...")
     input_path = os.path.join(DOWNLOAD_DIR, filename)
     output_path = os.path.join(OUTPUT_DIR, os.path.splitext(filename)[0] + "_Hindi.pdf")
+
     try:
         await message.download(file_name=input_path)
-        await status.edit_text("📖 Read kar raha hu...")
+        await status.edit_text("📖 PDF padh raha hu...")
+
         doc = fitz.open(input_path)
         all_text = []
         for page in doc:
             t = page.get_text("text")
-            if t.strip(): all_text.append(t)
+            if t and t.strip():
+                all_text.append(t)
+
         doc.close()
+
         original_text = clean_text("\n\n".join(all_text))
-        if not original_text:
-            await status.edit_text("❌ Is PDF me text nahi hai, scanned hai.")
+        print(f"Extracted text length: {len(original_text)}")
+        print(f"First 200 chars: {original_text[:200]}")
+
+        if len(original_text) < 30:
+            await status.edit_text("❌ Is PDF me readable text nahi hai. Ye scanned PDF lagta hai.\nKoi dusra PDF bhejo jisme se text copy hota ho.")
             return
-        await status.edit_text(f"🌐 Translation start: {len(original_text)} chars")
+
+        await status.edit_text(f"🌐 Translation start... {len(original_text)} chars")
         translated_text = await translate_text(original_text, status)
+
         await status.edit_text("📝 Hindi PDF bana raha hu...")
         await asyncio.to_thread(create_pdf, translated_text, output_path)
-        await status.edit_text("📤 Upload kar raha hu...")
-        await message.reply_document(document=output_path, caption="🇮🇳 Hindi PDF Ready ✅")
+
+        await status.edit_text("📤 Bhej raha hu...")
+        await message.reply_document(document=output_path, caption="🇮🇳 **Hindi PDF Ready** ✅")
         await status.delete()
+
     except Exception as e:
         print("MAIN ERROR:", repr(e))
         try: await status.edit_text(f"❌ Error: {str(e)[:2000]}")
@@ -174,6 +203,5 @@ async def pdf_handler(client, message):
                 if os.path.exists(p): os.remove(p)
             except: pass
 
-print("🇮🇳 Bot Started!")
-print("FONT:", FONT_PATH)
+print("🇮🇳 Bot Started! Font:", FONT_PATH)
 app.run()
