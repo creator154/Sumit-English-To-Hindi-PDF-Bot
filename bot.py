@@ -8,7 +8,7 @@ from fpdf import FPDF
 from config import API_ID, API_HASH, BOT_TOKEN, DOWNLOAD_DIR, OUTPUT_DIR
 
 # Free OCR.Space API key - tera khud ka https://ocr.space pe free me le sakta hai
-OCR_API_KEY = "K87899142388957" # helloworld demo key, limit 500/month
+OCR_API_KEY = "K84271633988957" # helloworld demo key, limit 500/month
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(BASE_DIR, DOWNLOAD_DIR) if not os.path.isabs(DOWNLOAD_DIR) else DOWNLOAD_DIR
