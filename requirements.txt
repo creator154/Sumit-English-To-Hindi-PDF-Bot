@@ -1,7 +1,8 @@
-Pyrogram
+pyrogram
 tgcrypto
 PyMuPDF
 deep-translator
 Pillow
 pytesseract
-fpdf2
+opencv-python-headless
+numpy
