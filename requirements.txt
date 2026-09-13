@@ -1,6 +1,8 @@
-    pyrogram
-    tgcrypto
-    PyMuPDF
-    deep-translator
-    fpdf2
-    requests
+herepyrogram
+tgcrypto
+pymupdf
+fpdf2
+deep-translator
+requests
+pytesseract
+Pillow
