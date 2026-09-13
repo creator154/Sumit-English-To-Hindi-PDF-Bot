@@ -1,6 +1,7 @@
-pyrogram
+herepyrogram
 tgcrypto
-pymupdf
-requests
-fpdf2
+PyMuPDF
 deep-translator
+Pillow
+pytesseract
+fpdf2
