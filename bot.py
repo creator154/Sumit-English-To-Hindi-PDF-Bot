@@ -27,14 +27,11 @@ def ensure_font():
     ]
     for url in urls:
         try:
-            print(f"Downloading font {url}")
             r = requests.get(url, timeout=90)
             if len(r.content) > 50000:
                 open(FONT_PATH, "wb").write(r.content)
-                print("Font OK")
                 return True
-        except Exception as e:
-            print(f"Font fail {e}")
+        except: pass
     return False
 
 ensure_font()
@@ -63,23 +60,20 @@ def extract_text(pdf_path):
     full = ""
     for page_num, page in enumerate(doc):
         txt = page.get_text("text").strip()
-        print(f"Page {page_num} text len {len(txt)}")
-        if len(txt) > 100:
+        if len(txt) > 20:
             full += txt + "\n\n"
-        else:
-            # OCR for scanned
-            pix = page.get_pixmap(dpi=350)
-            img_bytes = pix.tobytes("png")
-            nparr = np.frombuffer(img_bytes, np.uint8)
-            img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-            gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-            try:
-                ocr_txt = pytesseract.image_to_string(gray, lang='eng', config='--psm 6')
-                print(f"OCR page {page_num} len {len(ocr_txt)}")
+        pix = page.get_pixmap(dpi=400)
+        img_bytes = pix.tobytes("png")
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+        gray = cv2.medianBlur(gray, 3)
+        try:
+            ocr_txt = pytesseract.image_to_string(gray, lang='eng', config='--psm 3')
+            if len(ocr_txt.strip()) > 10:
                 full += ocr_txt + "\n\n"
-            except Exception as e:
-                print(f"OCR fail {e}")
+        except Exception as e:
+            print(f"OCR fail {e}")
     doc.close()
     return full
 
@@ -93,10 +87,8 @@ def create_pdf(text, output_path):
             pdf.set_font("NotoHindi", size=11)
         else:
             pdf.set_font("Helvetica", size=11)
-    except Exception as e:
-        print(f"Font error {e}")
+    except:
         pdf.set_font("Helvetica", size=11)
-
     for para in text.split("\n"):
         if not para.strip():
             pdf.ln(4)
@@ -116,15 +108,14 @@ async def start(c,m):
 async def pdf_handler(c,m):
     if not m.document.file_name.lower().endswith(".pdf"):
         return
-    status = await m.reply_text("Download ho raha hai...")
+    status = await m.reply_text("Download...")
     inp = os.path.join(DOWNLOAD_DIR, m.document.file_name)
     outp = os.path.join(OUTPUT_DIR, "Hindi_" + m.document.file_name)
     try:
         await m.download(inp)
-        await status.edit_text("PDF padh raha hu... (Scanned ho to time lagega)")
+        await status.edit_text("PDF padh raha hu...")
         original = await asyncio.to_thread(extract_text, inp)
         original = clean_text(original)
-        print(f"Total extracted {len(original)}")
         if len(original) < 20:
             await status.edit_text("❌ Text nahi mila. PDF blank hai ya image bahut kharab hai.")
             return
@@ -144,5 +135,5 @@ async def pdf_handler(c,m):
                 try: os.remove(p)
                 except: pass
 
-print("Bot Started - Final OCR Bot")
+print("Bot Started")
 app.run()
