@@ -1,4 +1,4 @@
-herepyrogram
+pyrogram
 tgcrypto
 PyMuPDF
 fpdf2
