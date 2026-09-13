@@ -6,3 +6,5 @@ deep-translator
 requests
 pytesseract
 Pillow
+numpy
+opencv-python-headless
