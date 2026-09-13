@@ -1,11 +1,6 @@
-import os
-import re
-import asyncio
-import requests
-import fitz
+import os, re, asyncio, requests, fitz, io
 from PIL import Image
-import pytesseract
-import io
+import easyocr
 
 from pyrogram import Client, filters
 from deep_translator import GoogleTranslator
@@ -18,119 +13,92 @@ OUTPUT_DIR = os.path.join(BASE_DIR, OUTPUT_DIR) if not os.path.isabs(OUTPUT_DIR)
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# FONT DOWNLOAD
 FONT_PATH = os.path.join(BASE_DIR, "NotoSansDevanagari-Regular.ttf")
-FONT_URLS = [
-    "https://raw.githubusercontent.com/google/fonts/main/ofl/notosansdevanagari/NotoSansDevanagari-Regular.ttf",
-    "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/notosansdevanagari/NotoSansDevanagari-Regular.ttf"
-]
 if os.path.exists(FONT_PATH) and os.path.getsize(FONT_PATH) < 100000:
     os.remove(FONT_PATH)
 if not os.path.exists(FONT_PATH):
-    for url in FONT_URLS:
+    for url in ["https://raw.githubusercontent.com/google/fonts/main/ofl/notosansdevanagari/NotoSansDevanagari-Regular.ttf"]:
         try:
             r = requests.get(url, timeout=60)
-            if len(r.content) > 50000:
-                open(FONT_PATH, "wb").write(r.content)
-                print(f"FONT OK {os.path.getsize(FONT_PATH)}")
-                break
-        except: continue
+            open(FONT_PATH, "wb").write(r.content)
+            break
+        except: pass
+
+# EasyOCR reader - ek baar load hoga
+reader = easyocr.Reader(['en'])
 
 app = Client("ocr_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-def clean_text(text):
-    return re.sub(r"\n{3,}", "\n\n", text.replace("\x00","")).strip()
+def clean_text(t): return re.sub(r"\n{3,}","\n\n",t.replace("\x00","")).strip()
 
 async def translate_text(text, status_msg):
-    # 800 chars ke chunk me translate
     chunks = [text[i:i+800] for i in range(0, len(text), 800)]
-    out = []
-    for idx, ch in enumerate(chunks):
+    out=[]
+    for idx,ch in enumerate(chunks):
         try:
             tr = await asyncio.to_thread(GoogleTranslator(source="en", target="hi").translate, ch)
             out.append(tr if tr else ch)
         except:
             out.append(ch)
-        await asyncio.sleep(1)
-        if idx % 3 == 0:
-            try: await status_msg.edit_text(f"🌐 Translate: {idx+1}/{len(chunks)}")
-            except: pass
+        await asyncio.sleep(0.8)
+        try: await status_msg.edit_text(f"🌐 Translate: {idx+1}/{len(chunks)}")
+        except: pass
     return "\n".join(out)
 
-def extract_with_ocr(pdf_path, status_msg_sync=None):
-    """Scanned PDF se OCR se English nikalega"""
+def extract_with_easyocr(pdf_path):
     doc = fitz.open(pdf_path)
-    full_text = ""
-    print(f"Total pages: {len(doc)}")
-    for page_num in range(len(doc)):
-        page = doc[page_num]
-        # Pehle normal text try
+    full=""
+    for page in doc:
         txt = page.get_text("text").strip()
-        if len(txt) > 100: # Agar normal text mil gaya to OCR skip
-            full_text += txt + "\n\n"
-            print(f"Page {page_num} normal text {len(txt)}")
+        if len(txt) > 80:
+            full+=txt+"\n\n"
         else:
-            # Scanned hai to OCR
-            print(f"Page {page_num} scanned, OCR kar raha hu...")
             pix = page.get_pixmap(dpi=300)
-            img_data = pix.tobytes("png")
-            img = Image.open(io.BytesIO(img_data))
-            # English OCR
-            ocr_text = pytesseract.image_to_string(img, lang='eng')
-            full_text += ocr_text + "\n\n"
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+            # EasyOCR
+            result = reader.readtext(pix.tobytes("png"), detail=0, paragraph=True)
+            full+=" ".join(result)+"\n\n"
     doc.close()
-    return full_text
+    return full
 
 def create_pdf(text, output_path):
-    pdf = FPDF()
+    pdf=FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
-    pdf.add_font("NotoHindi", "", FONT_PATH, uni=True)
+    pdf.add_font("NotoHindi","",FONT_PATH, uni=True)
     pdf.set_font("NotoHindi", size=11)
     for para in text.split("\n"):
-        if not para.strip():
-            pdf.ln(4)
-            continue
-        pdf.multi_cell(0, 7, para.strip())
+        if not para.strip(): pdf.ln(4); continue
+        pdf.multi_cell(0,7,para.strip())
     pdf.output(output_path)
 
 @app.on_message(filters.command("start"))
-async def start(client, message):
-    await message.reply_text("🇮🇳 **Scanned Test PDF → Hindi Bot**\n\nCLC / NRTS / NEET ka English test bhejo, chahe scanned ho, main Hindi bana dunga.")
+async def start(c,m): await m.reply_text("🇮🇳 CLC/NRTS/NEET scanned test bhi Hindi me kar dunga. PDF bhejo.")
 
 @app.on_message(filters.document)
-async def pdf_handler(client, message):
-    if not message.document.file_name.lower().endswith(".pdf"):
-        return
-    status = await message.reply_text("📥 Download...")
-    input_path = os.path.join(DOWNLOAD_DIR, message.document.file_name)
-    output_path = os.path.join(OUTPUT_DIR, "Hindi_" + message.document.file_name)
+async def pdf_handler(c,m):
+    if not m.document.file_name.lower().endswith(".pdf"): return
+    status = await m.reply_text("📥 Download...")
+    inp = os.path.join(DOWNLOAD_DIR, m.document.file_name)
+    outp = os.path.join(OUTPUT_DIR, "Hindi_"+m.document.file_name)
     try:
-        await message.download(input_path)
-        await status.edit_text("🔍 Scanned check + OCR padh raha hu... (1-2 min lagega)")
-
-        original_text = await asyncio.to_thread(extract_with_ocr, input_path)
-        original_text = clean_text(original_text)
-
-        if len(original_text) < 50:
-            await status.edit_text("❌ Isme text bilkul nahi mila, PDF khali hai")
-            return
-
-        await status.edit_text(f"📖 Total {len(original_text)} chars mile. Ab Hindi me translate...")
-
-        translated = await translate_text(original_text, status)
-
+        await m.download(inp)
+        await status.edit_text("🔍 OCR se padh raha hu... pehli baar 1 min lagega")
+        original = await asyncio.to_thread(extract_with_easyocr, inp)
+        original = clean_text(original)
+        if len(original)<30:
+            await status.edit_text("❌ Text nahi mila"); return
+        await status.edit_text(f"📖 {len(original)} chars mile, translate kar raha hu...")
+        hindi = await translate_text(original, status)
         await status.edit_text("📝 Hindi PDF bana raha hu...")
-        await asyncio.to_thread(create_pdf, translated, output_path)
-
-        await message.reply_document(output_path, caption="🇮🇳 Hindi Test Ready ✅")
+        await asyncio.to_thread(create_pdf, hindi, outp)
+        await m.reply_document(outp, caption="🇮🇳 Hindi Test Ready ✅")
         await status.delete()
     except Exception as e:
-        print(e)
-        await status.edit_text(f"❌ Error: {e}")
+        print(e); await status.edit_text(f"❌ {e}")
     finally:
-        for p in [input_path, output_path]:
+        for p in [inp,outp]:
             if os.path.exists(p): os.remove(p)
 
-print("Bot Started with OCR")
+print("Bot Started - EasyOCR")
 app.run()
