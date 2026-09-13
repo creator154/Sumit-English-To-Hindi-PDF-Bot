@@ -1,8 +1,10 @@
-pyrogram
+herepyrogram
 tgcrypto
 PyMuPDF
 fpdf2
 deep-translator
 requests
-pytesseract
+easyocr
 Pillow
+torch
+torchvision
