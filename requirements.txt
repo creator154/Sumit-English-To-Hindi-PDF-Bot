@@ -1,5 +1,6 @@
-pyrogram
+herepyrogram
 tgcrypto
-pypdf
+PyMuPDF
 deep-translator
 fpdf2
+uharfbuzz
