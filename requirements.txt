@@ -1,6 +1,6 @@
-pyrogram
-tgcrypto
-PyMuPDF
-deep-translator
-fpdf2
-uharfbuzz
+    pyrogram
+    tgcrypto
+    PyMuPDF
+    deep-translator
+    fpdf2
+    requests
