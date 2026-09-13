@@ -7,248 +7,175 @@ from pyrogram import Client, filters
 from deep_translator import GoogleTranslator
 from fpdf import FPDF
 
-from config import (
-    API_ID,
-    API_HASH,
-    BOT_TOKEN,
-    DOWNLOAD_DIR,
-    OUTPUT_DIR,
-    FONT_PATH,
-)
+from config import API_ID, API_HASH, BOT_TOKEN, DOWNLOAD_DIR, OUTPUT_DIR, FONT_PATH
 
-
-# =========================
-# FOLDERS
-# =========================
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
-# =========================
-# CHECK FONT
-# =========================
-
-if not os.path.exists(FONT_PATH):
-    raise FileNotFoundError(
-        f"Font file nahi mili: {FONT_PATH}"
-    )
-
-font_size = os.path.getsize(FONT_PATH)
-
-if font_size < 100000:
-    raise ValueError(
-        "NotoSansDevanagari-Regular.ttf actual font file nahi lag rahi."
-    )
-
-
-# =========================
-# BOT
-# =========================
-
 app = Client(
-    "EnglishHindiPDFBot",
+    "english_hindi_pdf_bot",
     api_id=API_ID,
     api_hash=API_HASH,
-    bot_token=BOT_TOKEN,
+    bot_token=BOT_TOKEN
 )
 
 
-# =========================
-# START
-# =========================
-
-@app.on_message(filters.command("start"))
-async def start(_, message):
-    await message.reply_text(
-        "🇮🇳 **English → Hindi PDF Bot**\n\n"
-        "English PDF bhejiye.\n"
-        "Main uska text Hindi me translate karke "
-        "nayi PDF bana dunga. 📄➡️🇮🇳"
-    )
+translator = GoogleTranslator(source="en", target="hi")
 
 
-# =========================
-# TEXT CLEAN
-# =========================
+def split_text(text, max_chars=2500):
+    """Text ko safe chunks me divide karta hai."""
+    text = text.strip()
+
+    if not text:
+        return []
+
+    chunks = []
+
+    while len(text) > max_chars:
+        cut = text.rfind("\n", 0, max_chars)
+
+        if cut < 500:
+            cut = text.rfind(" ", 0, max_chars)
+
+        if cut < 500:
+            cut = max_chars
+
+        chunks.append(text[:cut].strip())
+        text = text[cut:].strip()
+
+    if text:
+        chunks.append(text)
+
+    return chunks
+
+
+async def translate_text(text):
+    """English text ko Hindi me translate karta hai."""
+    chunks = split_text(text)
+
+    result = []
+
+    for chunk in chunks:
+        if not chunk.strip():
+            continue
+
+        try:
+            translated = await asyncio.to_thread(
+                translator.translate,
+                chunk
+            )
+
+            if translated:
+                result.append(translated)
+
+        except Exception as e:
+            print("Translation error:", e)
+
+            # Agar translation fail ho to original text rakhenge
+            result.append(chunk)
+
+        await asyncio.sleep(0.3)
+
+    return "\n\n".join(result)
+
 
 def clean_text(text):
-    if not text:
-        return ""
-
+    """PDF ke liye text clean karta hai."""
     text = text.replace("\x00", "")
     text = text.replace("\r", "\n")
 
-    # Extra spaces
-    text = re.sub(r"[ \t]+", " ", text)
-
-    # Too many blank lines
+    # Bahut zyada blank lines hatao
     text = re.sub(r"\n{3,}", "\n\n", text)
 
     return text.strip()
 
 
-# =========================
-# TRANSLATE
-# =========================
+def safe_lines(text, max_len=90):
+    """
+    Bahut lambi URL/word ko todta hai,
+    jisse FPDF horizontal-space error na aaye.
+    """
+    lines = []
 
-def translate_text(text):
-    translator = GoogleTranslator(
-        source="en",
-        target="hi"
-    )
+    for line in text.split("\n"):
+        line = line.strip()
 
-    # Paragraph based chunks
-    paragraphs = text.split("\n\n")
-
-    translated = []
-
-    for paragraph in paragraphs:
-
-        paragraph = paragraph.strip()
-
-        if not paragraph:
+        if not line:
+            lines.append("")
             continue
 
-        # Google translator ke liye chhote chunks
-        chunks = []
+        while len(line) > max_len:
+            lines.append(line[:max_len])
+            line = line[max_len:]
 
-        while len(paragraph) > 2500:
-            cut = paragraph.rfind(" ", 0, 2500)
+        if line:
+            lines.append(line)
 
-            if cut < 500:
-                cut = 2500
-
-            chunks.append(paragraph[:cut])
-            paragraph = paragraph[cut:].strip()
-
-        if paragraph:
-            chunks.append(paragraph)
-
-        for chunk in chunks:
-
-            result = None
-
-            for attempt in range(3):
-
-                try:
-                    result = translator.translate(chunk)
-
-                    if result:
-                        break
-
-                except Exception:
-                    awaitable = asyncio.sleep(1)
-                    try:
-                        asyncio.run(awaitable)
-                    except Exception:
-                        pass
-
-            if result:
-                translated.append(result)
-            else:
-                translated.append(chunk)
-
-    return "\n\n".join(translated)
+    return "\n".join(lines)
 
 
-# =========================
-# SAFE LINE
-# =========================
-
-def split_long_line(line, max_chars=90):
-    """
-    Bahut long URL/word ki wajah se
-    FPDF horizontal-space error na aaye.
-    """
-
-    if len(line) <= max_chars:
-        return [line]
-
-    parts = []
-
-    while len(line) > max_chars:
-        parts.append(line[:max_chars])
-        line = line[max_chars:]
-
-    if line:
-        parts.append(line)
-
-    return parts
-
-
-# =========================
-# CREATE PDF
-# =========================
-
-def create_pdf(text, output_file):
+def create_pdf(text, output_path):
+    """Hindi + English compatible PDF banata hai."""
 
     pdf = FPDF()
-
-    pdf.set_auto_page_break(
-        auto=True,
-        margin=15
-    )
+    pdf.set_auto_page_break(auto=True, margin=15)
 
     pdf.add_page()
 
     # Hindi font
     pdf.add_font(
-        "Noto",
+        "NotoHindi",
         "",
         FONT_PATH
     )
 
-    pdf.set_font(
-        "Noto",
-        size=12
-    )
+    pdf.set_font("NotoHindi", size=12)
 
-    # Title
-    pdf.set_font(
-        "Noto",
-        size=16
-    )
+    text = clean_text(text)
+    text = safe_lines(text)
 
-    pdf.multi_cell(
-        0,
-        10,
-        "English to Hindi Translation"
-    )
-
-    pdf.ln(4)
-
-    pdf.set_font(
-        "Noto",
-        size=12
-    )
-
-    lines = text.split("\n")
-
-    for line in lines:
-
-        line = line.strip()
-
-        if not line:
-            pdf.ln(5)
+    # UTF-8 Hindi text
+    for paragraph in text.split("\n"):
+        if not paragraph.strip():
+            pdf.ln(4)
             continue
 
-        safe_lines = split_long_line(line)
-
-        for safe_line in safe_lines:
-
+        try:
             pdf.multi_cell(
                 0,
                 7,
-                safe_line
+                paragraph,
+                wrapmode="CHAR"
             )
+        except Exception as e:
+            print("PDF line error:", e)
 
-    pdf.output(output_file)
+            # Character-by-character fallback
+            for part in [
+                paragraph[i:i + 70]
+                for i in range(0, len(paragraph), 70)
+            ]:
+                pdf.multi_cell(
+                    0,
+                    7,
+                    part,
+                    wrapmode="CHAR"
+                )
+
+    pdf.output(output_path)
 
 
-# =========================
-# PDF HANDLER
-# =========================
+@app.on_message(filters.command("start"))
+async def start_handler(client, message):
+    await message.reply_text(
+        "🇮🇳 **English → Hindi PDF Bot**\n\n"
+        "English PDF bhejo.\n"
+        "Main uska Hindi translated PDF bana kar bhej dunga."
+    )
+
 
 @app.on_message(filters.document)
 async def pdf_handler(client, message):
@@ -257,7 +184,7 @@ async def pdf_handler(client, message):
 
     if not document.file_name.lower().endswith(".pdf"):
         await message.reply_text(
-            "❌ Sirf PDF file bhejiye."
+            "❌ Sirf PDF file bhejo."
         )
         return
 
@@ -265,36 +192,33 @@ async def pdf_handler(client, message):
         "📥 PDF download ho rahi hai..."
     )
 
-    input_file = os.path.join(
+    input_path = os.path.join(
         DOWNLOAD_DIR,
-        f"{message.id}.pdf"
+        document.file_name
     )
 
-    output_file = os.path.join(
+    output_name = (
+        os.path.splitext(document.file_name)[0]
+        + "_Hindi.pdf"
+    )
+
+    output_path = os.path.join(
         OUTPUT_DIR,
-        f"Hindi_{message.id}.pdf"
+        output_name
     )
 
     try:
 
-        # =========================
-        # DOWNLOAD
-        # =========================
-
-        await client.download_media(
-            message,
-            file_name=input_file
+        await message.download(
+            file_name=input_path
         )
-
-        # =========================
-        # READ PDF
-        # =========================
 
         await status.edit_text(
-            "📖 PDF ka text read ho raha hai..."
+            "📖 PDF read ho rahi hai..."
         )
 
-        doc = fitz.open(input_file)
+        # PyMuPDF se text extraction
+        doc = fitz.open(input_path)
 
         all_text = []
 
@@ -304,83 +228,59 @@ async def pdf_handler(client, message):
 
             text = page.get_text("text")
 
-            text = clean_text(text)
-
-            if text:
+            if text.strip():
                 all_text.append(text)
 
             if page_number % 5 == 0:
-                try:
-                    await status.edit_text(
-                        f"📖 Reading PDF...\n"
-                        f"Page: {page_number}/{total_pages}"
-                    )
-                except Exception:
-                    pass
+                await status.edit_text(
+                    f"📖 Reading pages...\n"
+                    f"{page_number}/{total_pages}"
+                )
 
         doc.close()
 
         original_text = "\n\n".join(all_text)
+        original_text = clean_text(original_text)
 
-        if not original_text.strip():
-
+        if not original_text:
             await status.edit_text(
                 "❌ Is PDF me selectable text nahi mila.\n\n"
-                "Ye scanned/image PDF ho sakti hai."
+                "Ho sakta hai PDF scanned/image based ho."
             )
-
             return
 
-        # =========================
-        # TRANSLATION
-        # =========================
-
         await status.edit_text(
-            "🔄 English → Hindi translation start...\n\n"
-            f"📄 Pages: {total_pages}"
+            "🌐 English → Hindi translation started..."
         )
 
-        translated_text = await asyncio.to_thread(
-            translate_text,
+        translated_text = await translate_text(
             original_text
         )
 
         if not translated_text.strip():
-
             await status.edit_text(
-                "❌ Translation se text nahi mila."
+                "❌ Translation nahi ho paya."
             )
-
             return
 
-        # =========================
-        # CREATE PDF
-        # =========================
-
         await status.edit_text(
-            "📄 Hindi PDF ban rahi hai..."
+            "📝 Hindi PDF ban rahi hai..."
         )
 
-        await asyncio.to_thread(
-            create_pdf,
+        create_pdf(
             translated_text,
-            output_file
+            output_path
         )
-
-        # =========================
-        # SEND
-        # =========================
 
         await status.edit_text(
             "📤 Hindi PDF upload ho rahi hai..."
         )
 
         await message.reply_document(
-            output_file,
+            document=output_path,
             caption=(
                 "🇮🇳 **English → Hindi PDF**\n\n"
-                "✅ Translation Complete\n"
-                f"📄 Pages: {total_pages}"
+                "✅ Translation complete."
             )
         )
 
@@ -388,38 +288,27 @@ async def pdf_handler(client, message):
 
     except Exception as e:
 
-        print("ERROR:", repr(e))
+        print("MAIN ERROR:", repr(e))
 
-        try:
-            await status.edit_text(
-                "❌ Error aa gaya:\n\n"
-                f"`{str(e)[:3000]}`"
-            )
-        except Exception:
-            pass
+        await status.edit_text(
+            f"❌ Error aa gaya:\n\n"
+            f"`{str(e)[:3000]}`"
+        )
 
     finally:
 
-        # =========================
-        # CLEAN FILES
-        # =========================
-
         try:
-            if os.path.exists(input_file):
-                os.remove(input_file)
+            if os.path.exists(input_path):
+                os.remove(input_path)
         except Exception:
             pass
 
         try:
-            if os.path.exists(output_file):
-                os.remove(output_file)
+            if os.path.exists(output_path):
+                os.remove(output_path)
         except Exception:
             pass
 
-
-# =========================
-# RUN
-# =========================
 
 print("🇮🇳 English → Hindi PDF Bot Started!")
 
