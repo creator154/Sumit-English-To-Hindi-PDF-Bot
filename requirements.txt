@@ -1,2 +1,7 @@
-Flask
-gunicorn
+pyrogram
+tgcrypto
+python-dotenv
+requests
+pypdf
+reportlab
+google-cloud-translate
