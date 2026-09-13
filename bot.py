@@ -1,21 +1,12 @@
 import os, re, asyncio, requests, fitz, io
+import cv2
 import numpy as np
 from PIL import Image
+import pytesseract
 from pyrogram import Client, filters
 from deep_translator import GoogleTranslator
 from fpdf import FPDF
 from config import API_ID, API_HASH, BOT_TOKEN, DOWNLOAD_DIR, OUTPUT_DIR
-
-# Try EasyOCR first (Google jaisa), nahi to Tesseract
-try:
-    import easyocr
-    READER = easyocr.Reader(['en','hi'], gpu=False)
-    USE_EASY = True
-    print("Using EasyOCR")
-except:
-    import pytesseract
-    USE_EASY = False
-    print("Using Tesseract fallback")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(BASE_DIR, DOWNLOAD_DIR) if not os.path.isabs(DOWNLOAD_DIR) else DOWNLOAD_DIR
@@ -56,33 +47,28 @@ async def translate_text(text, status_msg):
         except: pass
     return "\n".join(out)
 
-def extract_text_google(pdf_path):
+def extract_text(pdf_path):
     doc = fitz.open(pdf_path)
     full = ""
     for page in doc:
-        # 1. Direct text if available
         txt = page.get_text("text").strip()
-        if len(txt) > 100:
+        if len(txt) > 50:
             full += txt + "\n\n"
             continue
-        
-        # 2. OCR for scanned
-        pix = page.get_pixmap(dpi=400)
+        pix = page.get_pixmap(dpi=500)
         img_bytes = pix.tobytes("png")
-        img = Image.open(io.BytesIO(img_bytes))
-        
-        if USE_EASY:
-            # EasyOCR - Google jaisa
-            results = READER.readtext(np.array(img), detail=0, paragraph=True)
-            ocr_txt = "\n".join(results)
-        else:
-            import cv2, pytesseract
-            nparr = np.frombuffer(img_bytes, np.uint8)
-            img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-            ocr_txt = pytesseract.image_to_string(gray, lang='eng+hin', config='--psm 6')
-        
-        full += ocr_txt + "\n\n"
+        nparr = np.frombuffer(img_bytes, np.uint8)
+        img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        img_cv = cv2.resize(img_cv, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+        gray = cv2.medianBlur(gray, 3)
+        _, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        try:
+            ocr_txt = pytesseract.image_to_string(gray, lang='eng+hin', config='--psm 6 --oem 3')
+            if len(ocr_txt.strip()) > 10:
+                full += ocr_txt + "\n\n"
+        except Exception as e:
+            print(f"OCR fail {e}")
     doc.close()
     return full
 
@@ -110,7 +96,7 @@ def create_pdf(text, output_path):
 
 @app.on_message(filters.command("start"))
 async def start(c,m):
-    await m.reply_text("Bot Ready ✅ Google jaisa - Koi bhi PDF bhejo")
+    await m.reply_text("Bot Ready ✅ Koi bhi PDF bhejo")
 
 @app.on_message(filters.document)
 async def pdf_handler(c,m):
@@ -121,17 +107,17 @@ async def pdf_handler(c,m):
     outp = os.path.join(OUTPUT_DIR, "Hindi_" + m.document.file_name)
     try:
         await m.download(inp)
-        await status.edit_text("Padh raha hu... (Google OCR)")
-        original = await asyncio.to_thread(extract_text_google, inp)
+        await status.edit_text("Padh raha hu...")
+        original = await asyncio.to_thread(extract_text, inp)
         original = clean_text(original)
-        print(f"Extracted {len(original)} chars")
         if len(original) < 20:
-            await status.edit_text("❌ Isme text bahut halka hai, fir bhi try kar raha hu...")
-        await status.edit_text(f"{len(original)} chars mile, Hindi me badal raha hu...")
+            await status.edit_text("❌ Text nahi mila - image bahut light hai")
+            return
+        await status.edit_text(f"{len(original)} chars mile, translate...")
         hindi = await translate_text(original, status)
         await status.edit_text("PDF bana raha hu...")
         await asyncio.to_thread(create_pdf, hindi, outp)
-        await m.reply_document(outp, caption="✅ Hindi PDF Ready - Google Style")
+        await m.reply_document(outp, caption="✅ Hindi Ready")
         await status.delete()
     except Exception as e:
         print(e)
@@ -143,5 +129,5 @@ async def pdf_handler(c,m):
                 try: os.remove(p)
                 except: pass
 
-print("Bot Started - Google Style")
+print("Bot Started")
 app.run()
