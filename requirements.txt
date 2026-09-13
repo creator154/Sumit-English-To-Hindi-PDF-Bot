@@ -4,7 +4,5 @@ PyMuPDF
 fpdf2
 deep-translator
 requests
-rapidocr-onnxruntime
+pytesseract
 Pillow
-numpy
-opencv-python-headless
