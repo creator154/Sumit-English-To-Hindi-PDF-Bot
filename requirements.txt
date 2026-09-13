@@ -1,4 +1,4 @@
-herepyrogram
+Pyrogram
 tgcrypto
 PyMuPDF
 deep-translator
