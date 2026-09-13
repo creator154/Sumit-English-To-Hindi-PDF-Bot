@@ -1,6 +1,7 @@
 import os, re, asyncio, requests, fitz, io
 from PIL import Image
-import easyocr
+import numpy as np
+from rapidocr_onnxruntime import RapidOCR
 
 from pyrogram import Client, filters
 from deep_translator import GoogleTranslator
@@ -17,15 +18,13 @@ FONT_PATH = os.path.join(BASE_DIR, "NotoSansDevanagari-Regular.ttf")
 if os.path.exists(FONT_PATH) and os.path.getsize(FONT_PATH) < 100000:
     os.remove(FONT_PATH)
 if not os.path.exists(FONT_PATH):
-    for url in ["https://raw.githubusercontent.com/google/fonts/main/ofl/notosansdevanagari/NotoSansDevanagari-Regular.ttf"]:
-        try:
-            r = requests.get(url, timeout=60)
-            open(FONT_PATH, "wb").write(r.content)
-            break
-        except: pass
+    try:
+        r = requests.get("https://raw.githubusercontent.com/google/fonts/main/ofl/notosansdevanagari/NotoSansDevanagari-Regular.ttf", timeout=60)
+        open(FONT_PATH, "wb").write(r.content)
+    except: pass
 
-# EasyOCR reader - ek baar load hoga
-reader = easyocr.Reader(['en'])
+# OCR Engine
+engine = RapidOCR()
 
 app = Client("ocr_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -38,14 +37,13 @@ async def translate_text(text, status_msg):
         try:
             tr = await asyncio.to_thread(GoogleTranslator(source="en", target="hi").translate, ch)
             out.append(tr if tr else ch)
-        except:
-            out.append(ch)
+        except: out.append(ch)
         await asyncio.sleep(0.8)
         try: await status_msg.edit_text(f"🌐 Translate: {idx+1}/{len(chunks)}")
         except: pass
     return "\n".join(out)
 
-def extract_with_easyocr(pdf_path):
+def extract_with_rapidocr(pdf_path):
     doc = fitz.open(pdf_path)
     full=""
     for page in doc:
@@ -53,11 +51,13 @@ def extract_with_easyocr(pdf_path):
         if len(txt) > 80:
             full+=txt+"\n\n"
         else:
-            pix = page.get_pixmap(dpi=300)
-            img = Image.open(io.BytesIO(pix.tobytes("png")))
-            # EasyOCR
-            result = reader.readtext(pix.tobytes("png"), detail=0, paragraph=True)
-            full+=" ".join(result)+"\n\n"
+            pix = page.get_pixmap(dpi=250)
+            img_bytes = pix.tobytes("png")
+            img = Image.open(io.BytesIO(img_bytes))
+            result, _ = engine(np.array(img))
+            if result:
+                page_text = " ".join([line[1] for line in result])
+                full+=page_text+"\n\n"
     doc.close()
     return full
 
@@ -73,7 +73,7 @@ def create_pdf(text, output_path):
     pdf.output(output_path)
 
 @app.on_message(filters.command("start"))
-async def start(c,m): await m.reply_text("🇮🇳 CLC/NRTS/NEET scanned test bhi Hindi me kar dunga. PDF bhejo.")
+async def start(c,m): await m.reply_text("🇮🇳 Scanned CLC/NRTS/NEET → Hindi bot ready. PDF bhejo.")
 
 @app.on_message(filters.document)
 async def pdf_handler(c,m):
@@ -83,14 +83,14 @@ async def pdf_handler(c,m):
     outp = os.path.join(OUTPUT_DIR, "Hindi_"+m.document.file_name)
     try:
         await m.download(inp)
-        await status.edit_text("🔍 OCR se padh raha hu... pehli baar 1 min lagega")
-        original = await asyncio.to_thread(extract_with_easyocr, inp)
+        await status.edit_text("🔍 Scanned OCR padh raha hu...")
+        original = await asyncio.to_thread(extract_with_rapidocr, inp)
         original = clean_text(original)
         if len(original)<30:
             await status.edit_text("❌ Text nahi mila"); return
-        await status.edit_text(f"📖 {len(original)} chars mile, translate kar raha hu...")
+        await status.edit_text(f"📖 {len(original)} chars mile, Hindi translate...")
         hindi = await translate_text(original, status)
-        await status.edit_text("📝 Hindi PDF bana raha hu...")
+        await status.edit_text("📝 PDF bana raha hu...")
         await asyncio.to_thread(create_pdf, hindi, outp)
         await m.reply_document(outp, caption="🇮🇳 Hindi Test Ready ✅")
         await status.delete()
@@ -100,5 +100,5 @@ async def pdf_handler(c,m):
         for p in [inp,outp]:
             if os.path.exists(p): os.remove(p)
 
-print("Bot Started - EasyOCR")
+print("Bot Started - RapidOCR")
 app.run()
