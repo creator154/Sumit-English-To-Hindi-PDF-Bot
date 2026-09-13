@@ -13,248 +13,380 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 
 
-# =========================
+# =========================================================
 # CONFIG
-# =========================
+# =========================================================
 
 API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
 app = Client(
-    "english_hindi_visual_bot",
+    "english_hindi_visual_translator",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
 )
 
 
-# =========================
+# =========================================================
+# PATHS
+# =========================================================
+
+BASE_DIR = os.path.dirname(
+    os.path.abspath(__file__)
+)
+
+LOCAL_TESSDATA = os.path.join(
+    BASE_DIR,
+    "tessdata"
+)
+
+LOCAL_ENG_DATA = os.path.join(
+    LOCAL_TESSDATA,
+    "eng.traineddata"
+)
+
+
+# =========================================================
 # TESSERACT SETUP
-# =========================
+# =========================================================
 
 def setup_tesseract():
-    """
-    Automatically find Tesseract and tessdata.
-    Works better on Heroku/Linux.
-    """
 
-    possible_tesseract = [
+    # Find tesseract executable
+    possible_paths = [
         "/usr/bin/tesseract",
         "/usr/local/bin/tesseract"
     ]
 
-    for path in possible_tesseract:
+    for path in possible_paths:
+
         if os.path.exists(path):
+
             pytesseract.pytesseract.tesseract_cmd = path
+
+            print(
+                "Tesseract:",
+                path
+            )
+
             break
 
-    possible_tessdata = [
-        "/usr/share/tesseract-ocr/5/tessdata",
-        "/usr/share/tesseract-ocr/4.00/tessdata",
-        "/usr/share/tessdata",
-        "/usr/local/share/tessdata"
-    ]
+    # Use local tessdata if available
+    if os.path.exists(LOCAL_ENG_DATA):
 
-    for path in possible_tessdata:
-        eng_file = os.path.join(path, "eng.traineddata")
+        os.environ["TESSDATA_PREFIX"] = (
+            LOCAL_TESSDATA + os.sep
+        )
 
-        if os.path.exists(eng_file):
-            os.environ["TESSDATA_PREFIX"] = path
-            break
+        print(
+            "Local English data found:"
+        )
+
+        print(
+            LOCAL_ENG_DATA
+        )
+
+    else:
+
+        print(
+            "WARNING: Local eng.traineddata not found."
+        )
+
+        print(
+            "Expected:",
+            LOCAL_ENG_DATA
+        )
 
 
 setup_tesseract()
 
 
-# =========================
+# =========================================================
 # FONT
-# =========================
+# =========================================================
 
-FONT_FILES = [
-    "NotoSansDevanagari-Regular.ttf",
-    "NotoSansDevanagari-Regular (6).ttf"
+FONT_PATH = None
+
+possible_fonts = [
+
+    os.path.join(
+        BASE_DIR,
+        "NotoSansDevanagari-Regular.ttf"
+    ),
+
+    os.path.join(
+        BASE_DIR,
+        "NotoSansDevanagari-Regular (6).ttf"
+    )
 ]
 
 
-def get_font_path():
-    for font in FONT_FILES:
-        if os.path.exists(font):
-            return font
+for font_path in possible_fonts:
 
-    return None
+    if os.path.exists(font_path):
+
+        FONT_PATH = font_path
+
+        print(
+            "Hindi font:",
+            FONT_PATH
+        )
+
+        break
 
 
-FONT_PATH = get_font_path()
+# =========================================================
+# FONT FUNCTION
+# =========================================================
+
+def get_font(size):
+
+    if FONT_PATH:
+
+        return ImageFont.truetype(
+            FONT_PATH,
+            size
+        )
+
+    return ImageFont.load_default()
 
 
-# =========================
-# HELPERS
-# =========================
+# =========================================================
+# TEXT CLEAN
+# =========================================================
 
 def clean_text(text):
+
+    if not text:
+        return ""
+
     text = text.strip()
-    text = re.sub(r"\s+", " ", text)
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
+
     return text
 
 
-def is_useful_text(text):
+# =========================================================
+# CHECK TEXT
+# =========================================================
+
+def useful_text(text):
+
     text = clean_text(text)
 
-    if not text:
-        return False
-
-    # At least one English alphabet
-    if not re.search(r"[A-Za-z]", text):
-        return False
-
-    # Ignore very small OCR fragments
     if len(text) < 2:
+        return False
+
+    if not re.search(
+        r"[A-Za-z]",
+        text
+    ):
         return False
 
     return True
 
 
+# =========================================================
+# TRANSLATION
+# =========================================================
+
 def translate_text(text):
+
+    text = clean_text(text)
+
+    if not text:
+        return ""
+
     try:
-        translator = GoogleTranslator(
+
+        result = GoogleTranslator(
             source="en",
             target="hi"
-        )
-
-        result = translator.translate(text)
+        ).translate(text)
 
         if result:
-            return clean_text(result)
+
+            return clean_text(
+                result
+            )
 
     except Exception as e:
-        print("TRANSLATION ERROR:", e)
+
+        print(
+            "TRANSLATION ERROR:",
+            repr(e)
+        )
 
     return text
 
 
-# =========================
-# FONT SIZE
-# =========================
-
-def get_font(size):
-    if FONT_PATH and os.path.exists(FONT_PATH):
-        return ImageFont.truetype(FONT_PATH, size)
-
-    # Fallback
-    return ImageFont.load_default()
-
-
-def fit_text(draw, text, box_width, box_height):
-    """
-    Find a Hindi font size that fits inside OCR box.
-    """
-
-    max_size = max(12, min(60, int(box_height * 0.90)))
-
-    for size in range(max_size, 7, -1):
-
-        font = get_font(size)
-
-        bbox = draw.multiline_textbbox(
-            (0, 0),
-            text,
-            font=font,
-            spacing=2
-        )
-
-        width = bbox[2] - bbox[0]
-        height = bbox[3] - bbox[1]
-
-        if width <= box_width and height <= box_height:
-            return font
-
-    return get_font(10)
-
-
-# =========================
+# =========================================================
 # OCR
-# =========================
+# =========================================================
 
 def detect_text(image):
-    """
-    Detect English text using Tesseract.
-    Returns:
-        [(x, y, w, h, text, confidence), ...]
-    """
 
-    data = pytesseract.image_to_data(
-        image,
-        lang="eng",
-        config="--oem 3 --psm 6",
-        output_type=pytesseract.Output.DICT
+    # Check trained data first
+    if not os.path.exists(
+        LOCAL_ENG_DATA
+    ):
+
+        raise Exception(
+            "eng.traineddata missing. "
+            "GitHub repo me tessdata/eng.traineddata "
+            "file add karo."
+        )
+
+    print(
+        "Running Tesseract OCR..."
     )
+
+    try:
+
+        data = pytesseract.image_to_data(
+            image,
+            lang="eng",
+            config="--oem 3 --psm 6",
+            output_type=pytesseract.Output.DICT
+        )
+
+    except Exception as e:
+
+        raise Exception(
+            "Tesseract OCR failed: "
+            + str(e)
+        )
 
     results = []
 
-    total = len(data["text"])
+    count = len(
+        data["text"]
+    )
 
-    for i in range(total):
+    for i in range(count):
 
-        text = clean_text(data["text"][i])
+        text = clean_text(
+            data["text"][i]
+        )
 
         try:
-            confidence = float(data["conf"][i])
+
+            confidence = float(
+                data["conf"][i]
+            )
+
         except Exception:
+
             confidence = 0
 
         if confidence < 35:
             continue
 
-        if not is_useful_text(text):
+        if not useful_text(text):
             continue
 
-        x = int(data["left"][i])
-        y = int(data["top"][i])
-        w = int(data["width"][i])
-        h = int(data["height"][i])
+        try:
 
-        if w <= 2 or h <= 2:
+            x = int(
+                data["left"][i]
+            )
+
+            y = int(
+                data["top"][i]
+            )
+
+            w = int(
+                data["width"][i]
+            )
+
+            h = int(
+                data["height"][i]
+            )
+
+        except Exception:
+
+            continue
+
+        if w < 3 or h < 3:
             continue
 
         results.append(
-            (x, y, w, h, text, confidence)
+            (
+                x,
+                y,
+                w,
+                h,
+                text,
+                confidence
+            )
         )
+
+    print(
+        "Detected text:",
+        len(results)
+    )
 
     return results
 
 
-# =========================
-# REMOVE OLD TEXT
-# =========================
+# =========================================================
+# REMOVE ORIGINAL TEXT
+# =========================================================
 
-def remove_original_text(image, boxes):
-    """
-    Remove detected English text using OpenCV inpainting.
-    """
+def remove_original_text(
+    image,
+    boxes
+):
 
     mask = np.zeros(
         image.shape[:2],
         dtype=np.uint8
     )
 
-    for x, y, w, h, text, confidence in boxes:
+    for (
+        x,
+        y,
+        w,
+        h,
+        text,
+        confidence
+    ) in boxes:
 
-        # Slight padding around text
-        pad_x = max(2, int(w * 0.08))
-        pad_y = max(2, int(h * 0.20))
+        padding_x = max(
+            2,
+            int(w * 0.08)
+        )
 
-        x1 = max(0, x - pad_x)
-        y1 = max(0, y - pad_y)
+        padding_y = max(
+            2,
+            int(h * 0.25)
+        )
+
+        x1 = max(
+            0,
+            x - padding_x
+        )
+
+        y1 = max(
+            0,
+            y - padding_y
+        )
 
         x2 = min(
             image.shape[1],
-            x + w + pad_x
+            x + w + padding_x
         )
 
         y2 = min(
             image.shape[0],
-            y + h + pad_y
+            y + h + padding_y
         )
 
         cv2.rectangle(
@@ -266,6 +398,7 @@ def remove_original_text(image, boxes):
         )
 
     if np.any(mask):
+
         image = cv2.inpaint(
             image,
             mask,
@@ -276,230 +409,368 @@ def remove_original_text(image, boxes):
     return image
 
 
-# =========================
-# DRAW HINDI
-# =========================
+# =========================================================
+# FIT HINDI TEXT
+# =========================================================
 
-def draw_translations(image, boxes):
-    """
-    Put Hindi translation approximately
-    where English text was.
-    """
+def fit_font(
+    draw,
+    text,
+    width,
+    height
+):
 
-    pil_image = Image.fromarray(
-        cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    max_size = max(
+        12,
+        min(
+            60,
+            int(height * 0.95)
+        )
     )
 
-    draw = ImageDraw.Draw(pil_image)
+    for size in range(
+        max_size,
+        7,
+        -1
+    ):
 
-    for x, y, w, h, english, confidence in boxes:
+        font = get_font(
+            size
+        )
 
-        hindi = translate_text(english)
+        bbox = draw.textbbox(
+            (0, 0),
+            text,
+            font=font
+        )
+
+        text_width = (
+            bbox[2] - bbox[0]
+        )
+
+        text_height = (
+            bbox[3] - bbox[1]
+        )
+
+        if (
+            text_width <= width
+            and
+            text_height <= height
+        ):
+
+            return font
+
+    return get_font(10)
+
+
+# =========================================================
+# DRAW HINDI
+# =========================================================
+
+def draw_hindi(
+    image,
+    boxes
+):
+
+    pil_image = Image.fromarray(
+        cv2.cvtColor(
+            image,
+            cv2.COLOR_BGR2RGB
+        )
+    )
+
+    draw = ImageDraw.Draw(
+        pil_image
+    )
+
+    for (
+        x,
+        y,
+        w,
+        h,
+        english,
+        confidence
+    ) in boxes:
+
+        print(
+            "Translating:",
+            english
+        )
+
+        hindi = translate_text(
+            english
+        )
 
         if not hindi:
             continue
 
-        # Slightly bigger area for Hindi
-        box_width = max(w, 40)
-        box_height = max(h, 20)
-
-        font = fit_text(
+        font = fit_font(
             draw,
             hindi,
-            box_width,
-            box_height
+            max(w, 30),
+            max(h, 20)
         )
 
-        # Calculate text dimensions
-        bbox = draw.multiline_textbbox(
+        bbox = draw.textbbox(
             (0, 0),
             hindi,
-            font=font,
-            spacing=2
+            font=font
         )
 
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
+        text_width = (
+            bbox[2] - bbox[0]
+        )
 
-        # Keep inside image
+        text_height = (
+            bbox[3] - bbox[1]
+        )
+
         draw_x = x
-
-        if draw_x + text_width > pil_image.width:
-            draw_x = max(
-                0,
-                pil_image.width - text_width - 2
-            )
-
         draw_y = y
 
-        if draw_y + text_height > pil_image.height:
-            draw_y = max(
+        # Keep text inside image
+
+        if (
+            draw_x + text_width
+            > pil_image.width
+        ):
+
+            draw_x = max(
                 0,
-                pil_image.height - text_height - 2
+                pil_image.width
+                - text_width
+                - 2
             )
 
-        # White/light background behind Hindi text
-        # to make translation readable.
-        padding = 2
+        if (
+            draw_y + text_height
+            > pil_image.height
+        ):
+
+            draw_y = max(
+                0,
+                pil_image.height
+                - text_height
+                - 2
+            )
+
+        # Small white background
+        # for readability
+
+        pad = 2
 
         draw.rectangle(
             [
-                draw_x - padding,
-                draw_y - padding,
+                max(
+                    0,
+                    draw_x - pad
+                ),
+
+                max(
+                    0,
+                    draw_y - pad
+                ),
+
                 min(
                     pil_image.width,
-                    draw_x + text_width + padding
+                    draw_x
+                    + text_width
+                    + pad
                 ),
+
                 min(
                     pil_image.height,
-                    draw_y + text_height + padding
+                    draw_y
+                    + text_height
+                    + pad
                 )
             ],
             fill="white"
         )
 
-        draw.multiline_text(
-            (draw_x, draw_y),
+        draw.text(
+            (
+                draw_x,
+                draw_y
+            ),
             hindi,
             font=font,
-            fill="black",
-            spacing=2
+            fill="black"
         )
 
-    result = cv2.cvtColor(
+    return cv2.cvtColor(
         np.array(pil_image),
         cv2.COLOR_RGB2BGR
     )
 
-    return result
 
-
-# =========================
+# =========================================================
 # IMAGE TRANSLATOR
-# =========================
+# =========================================================
 
-def translate_image(input_file, output_file):
-    """
-    English Image
-        ↓
-    OCR
-        ↓
-    English text boxes
-        ↓
-    Hindi translation
-        ↓
-    Remove English
-        ↓
-    Put Hindi in same area
-    """
+def translate_image(
+    input_file,
+    output_file
+):
 
-    image = cv2.imread(input_file)
+    print(
+        "Opening image..."
+    )
+
+    image = cv2.imread(
+        input_file
+    )
 
     if image is None:
-        raise Exception("Image open nahi ho paayi.")
 
-    print("OCR STARTED")
+        raise Exception(
+            "Image open nahi ho paayi."
+        )
 
-    boxes = detect_text(image)
-
-    print("TEXT BOXES:", len(boxes))
+    boxes = detect_text(
+        image
+    )
 
     if not boxes:
-        # No text detected
-        cv2.imwrite(output_file, image)
+
+        print(
+            "No English text detected."
+        )
+
+        cv2.imwrite(
+            output_file,
+            image
+        )
+
         return
 
-    print("REMOVING ORIGINAL TEXT")
+    print(
+        "Removing English text..."
+    )
 
     image = remove_original_text(
         image,
         boxes
     )
 
-    print("ADDING HINDI TRANSLATION")
+    print(
+        "Adding Hindi..."
+    )
 
-    image = draw_translations(
+    image = draw_hindi(
         image,
         boxes
     )
 
-    cv2.imwrite(
+    success = cv2.imwrite(
         output_file,
         image,
-        [cv2.IMWRITE_JPEG_QUALITY, 95]
+        [
+            cv2.IMWRITE_JPEG_QUALITY,
+            95
+        ]
     )
 
+    if not success:
 
-# =========================
+        raise Exception(
+            "Output image save nahi ho paayi."
+        )
+
+
+# =========================================================
 # PDF → IMAGES
-# =========================
+# =========================================================
 
-def pdf_to_images(pdf_file, output_dir):
-    """
-    Render PDF pages into high quality images.
-    """
+def pdf_to_images(
+    pdf_file,
+    output_dir
+):
 
-    doc = fitz.open(pdf_file)
+    doc = fitz.open(
+        pdf_file
+    )
 
     pages = []
 
-    for page_number, page in enumerate(doc):
+    try:
 
-        matrix = fitz.Matrix(
-            2.0,
-            2.0
-        )
+        for number, page in enumerate(
+            doc
+        ):
 
-        pix = page.get_pixmap(
-            matrix=matrix,
-            alpha=False
-        )
+            matrix = fitz.Matrix(
+                2,
+                2
+            )
 
-        image_path = os.path.join(
-            output_dir,
-            f"page_{page_number + 1}.jpg"
-        )
+            pix = page.get_pixmap(
+                matrix=matrix,
+                alpha=False
+            )
 
-        pix.save(image_path)
+            output = os.path.join(
+                output_dir,
+                f"page_{number + 1}.jpg"
+            )
 
-        pages.append(image_path)
+            pix.save(
+                output
+            )
 
-    doc.close()
+            pages.append(
+                output
+            )
+
+    finally:
+
+        doc.close()
 
     return pages
 
 
-# =========================
+# =========================================================
 # IMAGES → PDF
-# =========================
+# =========================================================
 
 def images_to_pdf(
-    image_files,
+    images,
     output_pdf
 ):
 
-    images = []
-
-    for file in image_files:
-
-        image = Image.open(file)
-
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-
-        images.append(image)
-
     if not images:
-        raise Exception("PDF ke liye pages nahi mile.")
 
-    first = images[0]
+        raise Exception(
+            "Translated pages nahi mile."
+        )
 
-    if len(images) > 1:
+    pil_images = []
+
+    for file in images:
+
+        img = Image.open(
+            file
+        )
+
+        if img.mode != "RGB":
+
+            img = img.convert(
+                "RGB"
+            )
+
+        pil_images.append(
+            img
+        )
+
+    first = pil_images[0]
+
+    if len(pil_images) > 1:
 
         first.save(
             output_pdf,
+            "PDF",
             save_all=True,
-            append_images=images[1:],
+            append_images=pil_images[1:],
             resolution=150
         )
 
@@ -507,16 +778,18 @@ def images_to_pdf(
 
         first.save(
             output_pdf,
+            "PDF",
             resolution=150
         )
 
-    for image in images:
-        image.close()
+    for img in pil_images:
+
+        img.close()
 
 
-# =========================
+# =========================================================
 # PDF TRANSLATOR
-# =========================
+# =========================================================
 
 def translate_pdf(
     input_pdf,
@@ -524,14 +797,16 @@ def translate_pdf(
 ):
 
     work_dir = tempfile.mkdtemp(
-        prefix="translator_"
+        prefix="pdf_translate_"
     )
 
     try:
 
-        print("PDF → IMAGES")
+        print(
+            "PDF pages rendering..."
+        )
 
-        original_pages = pdf_to_images(
+        pages = pdf_to_images(
             input_pdf,
             work_dir
         )
@@ -539,34 +814,36 @@ def translate_pdf(
         translated_pages = []
 
         print(
-            "TOTAL PAGES:",
-            len(original_pages)
+            "Total pages:",
+            len(pages)
         )
 
         for index, page in enumerate(
-            original_pages,
+            pages,
             start=1
         ):
 
-            output_image = os.path.join(
+            print(
+                f"Processing page {index}"
+            )
+
+            output = os.path.join(
                 work_dir,
                 f"translated_{index}.jpg"
             )
 
-            print(
-                f"PROCESSING PAGE {index}"
-            )
-
             translate_image(
                 page,
-                output_image
+                output
             )
 
             translated_pages.append(
-                output_image
+                output
             )
 
-        print("IMAGES → PDF")
+        print(
+            "Creating final PDF..."
+        )
 
         images_to_pdf(
             translated_pages,
@@ -581,14 +858,16 @@ def translate_pdf(
         )
 
 
-# =========================
-# START COMMAND
-# =========================
+# =========================================================
+# START
+# =========================================================
 
-@app.on_message(filters.command("start"))
-async def start_command(
-    client: Client,
-    message: Message
+@app.on_message(
+    filters.command("start")
+)
+async def start_handler(
+    client,
+    message
 ):
 
     await message.reply_text(
@@ -596,8 +875,8 @@ async def start_command(
         "📄 PDF ya Image bhejo.\n\n"
         "Bot English text ko detect karke "
         "Hindi me translate karega aur "
-        "translation ko original text ki "
-        "jagah par place karega.\n\n"
+        "image ke same area me Hindi "
+        "place karega.\n\n"
         "✅ PDF\n"
         "✅ JPG\n"
         "✅ JPEG\n"
@@ -606,24 +885,24 @@ async def start_command(
     )
 
 
-# =========================
-# DOCUMENT HANDLER
-# =========================
+# =========================================================
+# DOCUMENT
+# =========================================================
 
 @app.on_message(
     filters.document
 )
 async def document_handler(
-    client: Client,
-    message: Message
+    client,
+    message
 ):
 
     document = message.document
 
-    if not document:
-        return
-
-    file_name = document.file_name or "file"
+    file_name = (
+        document.file_name
+        or "input_file"
+    )
 
     extension = os.path.splitext(
         file_name
@@ -640,19 +919,18 @@ async def document_handler(
     if extension not in allowed:
 
         await message.reply_text(
-            "❌ Sirf PDF, JPG, JPEG, PNG "
-            "ya WEBP file bhejo."
+            "❌ Sirf PDF, JPG, JPEG, "
+            "PNG ya WEBP bhejo."
         )
 
         return
 
     status = await message.reply_text(
-        "⏳ Processing started...\n"
-        "Please wait."
+        "⏳ Processing started..."
     )
 
     temp_dir = tempfile.mkdtemp(
-        prefix="bot_"
+        prefix="document_"
     )
 
     input_file = os.path.join(
@@ -666,10 +944,6 @@ async def document_handler(
             file_name=input_file
         )
 
-        # =====================
-        # PDF
-        # =====================
-
         if extension == ".pdf":
 
             output_file = os.path.join(
@@ -678,7 +952,7 @@ async def document_handler(
             )
 
             await status.edit_text(
-                "🔍 PDF pages process ho rahe hain..."
+                "🔍 PDF process ho raha hai..."
             )
 
             translate_pdf(
@@ -689,14 +963,11 @@ async def document_handler(
             await message.reply_document(
                 document=output_file,
                 caption=(
-                    "🇮🇳 **English → Hindi Visual Translation**\n\n"
+                    "🇮🇳 **English → Hindi "
+                    "Visual Translation**\n\n"
                     "✅ Translation complete."
                 )
             )
-
-        # =====================
-        # IMAGE
-        # =====================
 
         else:
 
@@ -717,7 +988,8 @@ async def document_handler(
             await message.reply_photo(
                 photo=output_file,
                 caption=(
-                    "🇮🇳 **English → Hindi Visual Translation**\n\n"
+                    "🇮🇳 **English → Hindi "
+                    "Visual Translation**\n\n"
                     "✅ Translation complete."
                 )
             )
@@ -744,16 +1016,16 @@ async def document_handler(
         )
 
 
-# =========================
-# DIRECT PHOTO HANDLER
-# =========================
+# =========================================================
+# PHOTO
+# =========================================================
 
 @app.on_message(
     filters.photo
 )
 async def photo_handler(
-    client: Client,
-    message: Message
+    client,
+    message
 ):
 
     status = await message.reply_text(
@@ -788,7 +1060,8 @@ async def photo_handler(
         await message.reply_photo(
             photo=output_file,
             caption=(
-                "🇮🇳 **English → Hindi Visual Translation**\n\n"
+                "🇮🇳 **English → Hindi "
+                "Visual Translation**\n\n"
                 "✅ Translation complete."
             )
         )
@@ -815,14 +1088,15 @@ async def photo_handler(
         )
 
 
-# =========================
-# RUN BOT
-# =========================
+# =========================================================
+# RUN
+# =========================================================
 
 if __name__ == "__main__":
 
     print(
-        "🇮🇳 English → Hindi Visual Translator Started!"
+        "🇮🇳 English → Hindi Visual "
+        "Translator Started!"
     )
 
     app.run()
