@@ -4,7 +4,8 @@ PyMuPDF
 fpdf2
 deep-translator
 requests
-pytesseract
+easyocr
+torch
+torchvision
 Pillow
 numpy
-opencv-python-headless
