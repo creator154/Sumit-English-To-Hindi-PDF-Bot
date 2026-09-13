@@ -1,7 +1,5 @@
-pyrogram
+herepyrogram
 tgcrypto
-python-dotenv
-requests
 pypdf
-reportlab
-google-cloud-translate
+deep-translator
+fpdf2
