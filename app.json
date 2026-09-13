@@ -1,0 +1,30 @@
+{
+  "name": "English-Hindi-PDF-Bot",
+  "description": "Telegram bot to convert English PDF papers into Hindi PDF",
+  "repository": "https://github.com/YOUR_USERNAME/English-To-Hindi-PDF-Bot",
+  "keywords": [
+    "telegram",
+    "pdf",
+    "translation",
+    "hindi"
+  ],
+  "env": {
+    "API_ID": {
+      "description": "Telegram API ID",
+      "required": true
+    },
+    "API_HASH": {
+      "description": "Telegram API Hash",
+      "required": true
+    },
+    "BOT_TOKEN": {
+      "description": "Telegram Bot Token",
+      "required": true
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ]
+}
